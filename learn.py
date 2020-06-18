@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import progressbar
 import sys
 import math
 import random
@@ -18,6 +19,7 @@ import gzip
 import copy
 
 import sklearn
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.linear_model import LogisticRegression
@@ -907,6 +909,80 @@ def prune_backdoor_rf():
 	filename = 'prune%s%s/prune_%.2f%s%s%s.pickle' % (dirsuffix, "_"+opt.extraLabel if opt.extraLabel else "", opt.reduceValidationSet, '_oh' if opt.pruneOnlyHarmless else '', '_d' if opt.depth else '', suffix)
 	with open(filename, 'wb') as f:
 		pickle.dump([rel_steps, steps_done, scores, scores_bd], f)
+
+def validate_node(tree,val_data_X,val_data_Y,node): #1 is identical, 0 is bad (in theory)
+
+
+	nodes=tree.decision_path(val_data_X)[:,node] #get path of all samples passing through node
+	limit_dataset_to_node_X=[]
+	limit_dataset_to_node_Y=[]
+
+	#Get only the data from the validation dataset that pass through the node of the original IDS tree
+	for i in range(0,nodes.shape[0]):
+		if nodes[i]==1:
+			limit_dataset_to_node_X.append(val_data_X[i])
+			limit_dataset_to_node_Y.append(val_data_Y[i])
+
+    
+    #If there are samples passing through node, get wgd, otherwise return NaN
+	if ( len(limit_dataset_to_node_X)!=0): # If there are samples passing through node
+		estimator2 = DecisionTreeClassifier(max_leaf_nodes=2,max_depth=1, random_state=0) #Create tree with max depth 1 (only next split)
+		estimator2.fit(limit_dataset_to_node_X, limit_dataset_to_node_Y)
+		samples=len(limit_dataset_to_node_X) #Get ammount of samples passing through the node
+        
+		result=(tree.tree_.impurity[node]-estimator2.tree_.impurity[0])*samples #get ( gini(IDS_node) - gini(best_split_node) ) * samples
+		return(result) 
+	else:
+		return float('NaN')
+
+
+def validate_gini_rf():
+	#print("Entered validate_gini_rf")
+	global rf
+	validation_indices, good_test_indices, bad_test_indices = get_indices_for_backdoor_pruning()
+	val_data_X = x[validation_indices,:]
+	val_data_Y = y[validation_indices,:]
+
+	#Argeggate values for each tree
+	forest_gini_means=[]
+	forest_gini_medians=[]
+
+	#For each tree in forest compute weighted gini differences and get mean and median
+	for index, tree in enumerate(rf.estimators_):
+		print("Validating Gini of tree ",index)
+
+		#Get length of tree (each node has an index, find max)
+		nodes=tree.tree_.node_count
+		weighted_gini_differences=[]
+		
+		#Use progressbar to see whats happening, since it may take a long time depending on the size of dataset
+		bar = progressbar.ProgressBar(maxval=nodes, widgets=[progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage(), "  |  ",progressbar.ETA()])
+		bar.start()
+		#For each node in tree get weighted gini differences and append.
+		for n in range(0,nodes):
+			bar.update(n+1)
+			weighted_gini_differences.append(validate_node(tree,val_data_X,val_data_Y,n))
+		bar.finish()
+
+		#Remove NaNs (unreachable nodes due to no samples that pass through node in validation dataset)
+		weighted_gini_differences = [wgd for wgd in weighted_gini_differences if str(wgd) != 'nan']
+		
+		tree_mean=np.mean(weighted_gini_differences)
+		forest_gini_means.append(tree_mean)
+
+		tree_median=np.median(weighted_gini_differences)
+		forest_gini_medians.append(tree_median)
+
+		print("Mean: ",tree_mean," | Median: ",tree_median," | Std: ",np.std(weighted_gini_differences))
+		#Save wgd to file (for post analyzing if needed)
+		with open(get_logdir(opt.fold, opt.nFold)+'_val_tree_'+str(index)+'.pickle', 'wb') as file:
+			pickle.dump(weighted_gini_differences, file)
+		print("weighted_gini_differences of tree ",index," saved to file!")
+
+	#Print mean and median of forest
+	print("Forest wgd mean of means:",np.mean(forest_gini_means))
+	print("Forest wgd median of medians:",np.median(forest_gini_medians))
+
 
 def noop_nn():
 	pass
