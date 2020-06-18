@@ -17,6 +17,7 @@ import os
 import pickle
 import gzip
 import copy
+import warnings
 
 import sklearn
 from sklearn.tree import DecisionTreeClassifier
@@ -910,10 +911,24 @@ def prune_backdoor_rf():
 	with open(filename, 'wb') as f:
 		pickle.dump([rel_steps, steps_done, scores, scores_bd], f)
 
-def validate_node(tree,val_data_X,val_data_Y,node): #1 is identical, 0 is bad (in theory)
+def gini(actual, pred):
+	assert (len(actual) == len(pred))
+	all = np.asarray(np.c_[actual, pred, np.arange(len(actual))], dtype=np.float)
+	all = all[np.lexsort((all[:, 2], -1 * all[:, 1]))]
+	totalLosses = all[:, 0].sum()
+	giniSum = all[:, 0].cumsum().sum() / totalLosses
+
+	giniSum -= (len(actual) + 1) / 2.
+	return giniSum / len(actual)
 
 
-	nodes=tree.decision_path(val_data_X)[:,node] #get path of all samples passing through node
+def gini_normalized(actual, pred):
+    pred=list(pred)
+    return gini(actual, pred) / gini(actual, actual)
+
+def validate_node(tree,decision_path,val_data_X,val_data_Y,node): #1 is identical, 0 is bad (in theory)
+
+	nodes=decision_path[:,node] #get path of all samples passing through node
 	limit_dataset_to_node_X=[]
 	limit_dataset_to_node_Y=[]
 
@@ -922,15 +937,14 @@ def validate_node(tree,val_data_X,val_data_Y,node): #1 is identical, 0 is bad (i
 		if nodes[i]==1:
 			limit_dataset_to_node_X.append(val_data_X[i])
 			limit_dataset_to_node_Y.append(val_data_Y[i])
-
     
     #If there are samples passing through node, get wgd, otherwise return NaN
 	if ( len(limit_dataset_to_node_X)!=0): # If there are samples passing through node
 		estimator2 = DecisionTreeClassifier(max_leaf_nodes=2,max_depth=1, random_state=0) #Create tree with max depth 1 (only next split)
 		estimator2.fit(limit_dataset_to_node_X, limit_dataset_to_node_Y)
 		samples=len(limit_dataset_to_node_X) #Get ammount of samples passing through the node
-        
-		result=(tree.tree_.impurity[node]-estimator2.tree_.impurity[0])*samples #get ( gini(IDS_node) - gini(best_split_node) ) * samples
+		gini_IDS=gini_normalized(limit_dataset_to_node_Y,tree.predict(limit_dataset_to_node_X))
+		result=(gini_IDS-estimator2.tree_.impurity[0])*samples #get ( gini(IDS_node) - gini(best_split_node) ) * samples
 		return(result) 
 	else:
 		return float('NaN')
@@ -943,13 +957,20 @@ def validate_gini_rf():
 	val_data_X = x[validation_indices,:]
 	val_data_Y = y[validation_indices,:]
 
+	
+
 	#Argeggate values for each tree
 	forest_gini_means=[]
 	forest_gini_medians=[]
 
+	warnings.filterwarnings("ignore") #Division by 0 warnings
+
 	#For each tree in forest compute weighted gini differences and get mean and median
 	for index, tree in enumerate(rf.estimators_):
 		print("Validating Gini of tree ",index)
+
+		#Get decision_paths
+		decision_path=tree.decision_path(val_data_X)
 
 		#Get length of tree (each node has an index, find max)
 		nodes=tree.tree_.node_count
@@ -961,7 +982,7 @@ def validate_gini_rf():
 		#For each node in tree get weighted gini differences and append.
 		for n in range(0,nodes):
 			bar.update(n+1)
-			weighted_gini_differences.append(validate_node(tree,val_data_X,val_data_Y,n))
+			weighted_gini_differences.append(validate_node(tree,decision_path,val_data_X,val_data_Y,n))
 		bar.finish()
 
 		#Remove NaNs (unreachable nodes due to no samples that pass through node in validation dataset)
