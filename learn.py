@@ -911,20 +911,60 @@ def prune_backdoor_rf():
 	with open(filename, 'wb') as f:
 		pickle.dump([rel_steps, steps_done, scores, scores_bd], f)
 
-def gini(actual, pred):
-	assert (len(actual) == len(pred))
-	all = np.asarray(np.c_[actual, pred, np.arange(len(actual))], dtype=np.float)
-	all = all[np.lexsort((all[:, 2], -1 * all[:, 1]))]
-	totalLosses = all[:, 0].sum()
-	giniSum = all[:, 0].cumsum().sum() / totalLosses
 
-	giniSum -= (len(actual) + 1) / 2.
-	return giniSum / len(actual)
+def gini_index_child(samples,classes):
+    result = 1
+    total_samples=len(samples)
+    if total_samples==0:
+        return(0,0)
+    for c in range(0,len(classes)):
+        sample_x=samples.count(classes[c])
+        result-=((sample_x/total_samples)**2)
+    return (result,total_samples)
 
 
-def gini_normalized(actual, pred):
-    pred=list(pred)
-    return gini(actual, pred) / gini(actual, actual)
+def is_leaf(estim,node_id):
+    children_left = estim.tree_.children_left
+    children_right = estim.tree_.children_right
+    try:
+        if (children_left[node_id] != children_right[node_id]):
+            return False
+    except:
+        pass
+    #print("Node",node_id,"is leaf!")
+    return True
+
+def gini_index(estim,node,samples_x,samples_y,classes):
+    children_left = estim.tree_.children_left
+    children_right = estim.tree_.children_right
+    gini_node_0,_=gini_index_child(samples_y,classes)
+
+
+    if is_leaf(estim,node):
+        gini,_ =gini_index_child(samples_y,classes)
+        return gini
+
+    node_L=estim.decision_path(samples_x)[:,children_left[node]]
+    samples_L=[]
+
+    for i in range(0,node_L.shape[0]):
+        if node_L[i]==1:
+            samples_L.append(samples_y[i])
+    gini_L, total_samples_L=gini_index_child(samples_L,classes)
+
+    node_R=estim.decision_path(samples_x)[:,children_right[node]]
+    samples_R=[]
+    for i in range(0,node_R.shape[0]):
+        if node_R[i]==1:
+            samples_R.append(samples_y[i])
+    gini_R, total_samples_R=gini_index_child(samples_R,classes)
+
+    total_samples=total_samples_L + total_samples_R
+    if total_samples==0:
+        return 0
+    result = (total_samples_L/total_samples)*gini_L + ( (total_samples_R/total_samples)*gini_R )
+    return result
+
 
 def validate_node(tree,decision_path,val_data_X,val_data_Y,node): #1 is identical, 0 is bad (in theory)
 
@@ -943,8 +983,16 @@ def validate_node(tree,decision_path,val_data_X,val_data_Y,node): #1 is identica
 		estimator2 = DecisionTreeClassifier(max_leaf_nodes=2,max_depth=1, random_state=0) #Create tree with max depth 1 (only next split)
 		estimator2.fit(limit_dataset_to_node_X, limit_dataset_to_node_Y)
 		samples=len(limit_dataset_to_node_X) #Get ammount of samples passing through the node
-		gini_IDS=gini_normalized(limit_dataset_to_node_Y,tree.predict(limit_dataset_to_node_X))
-		result=(gini_IDS-estimator2.tree_.impurity[0])*samples #get ( gini(IDS_node) - gini(best_split_node) ) * samples
+
+		if(is_leaf(tree,node)):
+			gini_IDS,_=gini_index_child(limit_dataset_to_node_Y,tree.classes_)
+			gini_Best_Split,_=gini_index_child(limit_dataset_to_node_Y,estimator2.classes_)
+		else:
+			gini_IDS=gini_index(tree,node,limit_dataset_to_node_X,limit_dataset_to_node_Y,tree.classes_)
+			gini_Best_Split=gini_index(estimator2,0,limit_dataset_to_node_X,limit_dataset_to_node_Y,estimator2.classes_)
+		
+		result=(gini_IDS-gini_Best_Split)*samples #get ( gini(IDS_node) - gini(best_split_node) ) * samples
+		#print("gini_IDS:",gini_IDS,"gini_BS:",gini_Best_Split,"samples:",samples,"wgd:",result)
 		return(result) 
 	else:
 		return float('NaN')
