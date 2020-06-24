@@ -993,9 +993,9 @@ def validate_node(tree,decision_path,val_data_X,val_data_Y,node): #1 is identica
 		
 		result=(gini_IDS-gini_Best_Split)*samples #get ( gini(IDS_node) - gini(best_split_node) ) * samples
 		#print("gini_IDS:",gini_IDS,"gini_BS:",gini_Best_Split,"samples:",samples,"wgd:",result)
-		return(result) 
+		return(result,samples) 
 	else:
-		return float('NaN')
+		return (float('NaN'),0)
 
 
 def validate_gini_rf():
@@ -1010,6 +1010,7 @@ def validate_gini_rf():
 	#Argeggate values for each tree
 	forest_gini_means=[]
 	forest_gini_medians=[]
+	forest_gini_normalized_means=[]
 
 	warnings.filterwarnings("ignore") #Division by 0 warnings
 
@@ -1023,6 +1024,7 @@ def validate_gini_rf():
 		#Get length of tree (each node has an index, find max)
 		nodes=tree.tree_.node_count
 		weighted_gini_differences=[]
+		samples_per_node=[]
 		
 		#Use progressbar to see whats happening, since it may take a long time depending on the size of dataset
 		bar = progressbar.ProgressBar(maxval=nodes, widgets=[progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage(), "  |  ",progressbar.ETA()])
@@ -1030,7 +1032,9 @@ def validate_gini_rf():
 		#For each node in tree get weighted gini differences and append.
 		for n in range(0,nodes):
 			bar.update(n+1)
-			weighted_gini_differences.append(validate_node(tree,decision_path,val_data_X,val_data_Y,n))
+			wgd,samples=validate_node(tree,decision_path,val_data_X,val_data_Y,n)
+			weighted_gini_differences.append(wgd)
+			samples_per_node.append(samples)
 		bar.finish()
 
 		#Remove NaNs (unreachable nodes due to no samples that pass through node in validation dataset)
@@ -1042,15 +1046,22 @@ def validate_gini_rf():
 		tree_median=np.median(weighted_gini_differences)
 		forest_gini_medians.append(tree_median)
 
+		tree_total_samples=np.sum(samples_per_node)
+
+		tree_normalized_mean=tree_mean/tree_total_samples
+		forest_gini_normalized_means.append(tree_normalized_mean)
+
 		print("Mean: ",tree_mean," | Median: ",tree_median," | Std: ",np.std(weighted_gini_differences))
+		print("Normalized mean:",tree_normalized_mean)
 		#Save wgd to file (for post analyzing if needed)
 		with open(get_logdir(opt.fold, opt.nFold)+'_val_tree_'+str(index)+'.pickle', 'wb') as file:
-			pickle.dump(weighted_gini_differences, file)
-		print("weighted_gini_differences of tree ",index," saved to file!")
+			pickle.dump((weighted_gini_differences,samples_per_node), file)
+		print("weighted_gini_differences and samples_per_node of tree ",index," saved to file!")
 
 	#Print mean and median of forest
-	print("Forest wgd mean of means:",np.mean(forest_gini_means))
-	print("Forest wgd median of medians:",np.median(forest_gini_medians))
+	#print("Forest wgd mean of means:",np.mean(forest_gini_means))
+	#print("Forest wgd median of medians:",np.median(forest_gini_medians))
+	print("Forest mean of normalized means:",np.mean(forest_gini_normalized_means))
 
 
 def noop_nn():
