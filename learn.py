@@ -1008,7 +1008,7 @@ def validate_gini_rf():
 	
 
 	#Argeggate values for each tree
-	forest_gini_means=[]
+	forest_gini_wgd_sum=[]
 	forest_gini_medians=[]
 	forest_gini_normalized_means=[]
 
@@ -1040,18 +1040,18 @@ def validate_gini_rf():
 		#Remove NaNs (unreachable nodes due to no samples that pass through node in validation dataset)
 		weighted_gini_differences = [wgd for wgd in weighted_gini_differences if str(wgd) != 'nan']
 		
-		tree_mean=np.mean(weighted_gini_differences)
-		forest_gini_means.append(tree_mean)
+		tree_wgd_sum=np.sum(weighted_gini_differences)
+		forest_gini_wgd_sum.append(tree_wgd_sum)
 
 		tree_median=np.median(weighted_gini_differences)
 		forest_gini_medians.append(tree_median)
 
 		tree_total_samples=np.sum(samples_per_node)
 
-		tree_normalized_mean=tree_mean/tree_total_samples
+		tree_normalized_mean=tree_wgd_sum/tree_total_samples
 		forest_gini_normalized_means.append(tree_normalized_mean)
 
-		print("Mean: ",tree_mean," | Median: ",tree_median," | Std: ",np.std(weighted_gini_differences))
+		#print("WGD sum: ",tree_wgd_sum," | Median: ",tree_median," | Std: ",np.std(weighted_gini_differences))
 		print("Normalized mean:",tree_normalized_mean)
 		#Save wgd to file (for post analyzing if needed)
 		with open(get_logdir(opt.fold, opt.nFold)+'_val_tree_'+str(index)+'.pickle', 'wb') as file:
